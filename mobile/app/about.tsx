@@ -9,7 +9,7 @@ export default function StatusScreen() {
   if (!fontsLoaded) {
     return null;
   }
-
+  
   // Battery percentage for conditional formatting
   const batteryPercentage = 100; // This would come from your robot's actual battery data
 
