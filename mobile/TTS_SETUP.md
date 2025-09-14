@@ -12,10 +12,16 @@ This guide will help you set up ElevenLabs text-to-speech functionality for the 
 
 ### 1. Configure ElevenLabs API Key
 
-Edit `/mobile/app/config.ts` and replace the placeholder with your actual API key:
+Copy the example environment file and add your API key:
 
-```typescript
-export const ELEVENLABS_API_KEY = "your_actual_api_key_here";
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and replace the placeholder with your actual API key:
+
+```bash
+ELEVENLABS_API_KEY=your_actual_api_key_here
 ```
 
 ### 2. Install Dependencies
@@ -23,6 +29,7 @@ export const ELEVENLABS_API_KEY = "your_actual_api_key_here";
 The required packages should already be installed:
 - `expo-av` - For audio playback
 - `react-native-sound` - Alternative audio library
+- `react-native-dotenv` - For environment variable management
 
 ### 3. Test the Integration
 
@@ -64,13 +71,14 @@ Available voices can be found in your ElevenLabs dashboard.
 ## Troubleshooting
 
 ### TTS Not Working
-1. Check that your ElevenLabs API key is correctly set
+1. Check that your ElevenLabs API key is correctly set in the `.env` file
 2. Verify you have sufficient API credits
 3. Check the console for error messages
+4. Make sure the `.env` file is in the root of the mobile directory
 
 ### WebSocket Connection Issues
 1. Ensure the Python backend is running
-2. Check that the IP address in `config.ts` matches your Pi's IP
+2. Check that the IP address in `.env` matches your Pi's IP
 3. Verify network connectivity between devices
 
 ### Audio Not Playing
@@ -84,4 +92,4 @@ The ElevenLabs API has usage limits based on your plan. Monitor your usage in th
 
 ## Security Note
 
-Never commit your actual API keys to version control. Consider using environment variables or a secure configuration system for production deployments.
+Never commit your actual API keys to version control. The `.env` file is already added to `.gitignore` to prevent accidental commits. Always use environment variables for sensitive configuration in production deployments.

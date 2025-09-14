@@ -6,7 +6,12 @@
       "@/*": [
         "./*"
       ]
-    }
+    },
+    "plugins": [
+      {
+        "name": "react-native-dotenv"
+      }
+    ]
   },
   "include": [
     "**/*.ts",

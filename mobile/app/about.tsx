@@ -26,12 +26,12 @@ export default function StatusScreen() {
     if (ELEVENLABS_API_KEY && ELEVENLABS_API_KEY !== "your_elevenlabs_api_key_here") {
       ttsServiceRef.current = new TTSService({
         apiKey: ELEVENLABS_API_KEY,
-        voiceId: ELEVENLABS_VOICE_ID,
+        voiceId: ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB",
       });
     } else {
       Alert.alert(
         "TTS Not Configured",
-        "Please set your ElevenLabs API key in config.ts to enable text-to-speech functionality."
+        "Please set your ElevenLabs API key in the .env file to enable text-to-speech functionality."
       );
     }
   }, []);
