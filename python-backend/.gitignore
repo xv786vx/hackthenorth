@@ -4,3 +4,4 @@ ENV/
 env/
 .venv/
 .python_env/
+.env
