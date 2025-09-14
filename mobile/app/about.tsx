@@ -1,7 +1,9 @@
-import { View, Text, StyleSheet, ScrollView, Image } from "react-native";
-import { useEffect, useState } from "react";
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert } from "react-native";
+import { useEffect, useState, useRef } from "react";
 import { useFonts, Sixtyfour_400Regular } from "@expo-google-fonts/sixtyfour";
-import { BACKEND_URL } from "./config";
+import { BACKEND_URL, WS_URL, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } from "./config";
+import { TTSService } from "./services/ttsService";
+import { WebSocketService, FeedbackMessage } from "./services/websocketService";
 
 export default function StatusScreen() {
   let [fontsLoaded] = useFonts({
@@ -11,7 +13,62 @@ export default function StatusScreen() {
   // ---- Camera: force HTTP polling for reliability on any Wi-Fi ----
   const [frameUri, setFrameUri] = useState<string | null>(null);
   const [connStatus, setConnStatus] = useState("polling /frame.jpg …");
+  
+  // ---- TTS and WebSocket services ----
+  const [wsStatus, setWsStatus] = useState("disconnected");
+  const [lastFeedback, setLastFeedback] = useState<string>("");
+  const [isTTSEnabled, setIsTTSEnabled] = useState(true);
+  const ttsServiceRef = useRef<TTSService | null>(null);
+  const wsServiceRef = useRef<WebSocketService | null>(null);
 
+  // Initialize TTS service
+  useEffect(() => {
+    if (ELEVENLABS_API_KEY && ELEVENLABS_API_KEY !== "your_elevenlabs_api_key_here") {
+      ttsServiceRef.current = new TTSService({
+        apiKey: ELEVENLABS_API_KEY,
+        voiceId: ELEVENLABS_VOICE_ID,
+      });
+    } else {
+      Alert.alert(
+        "TTS Not Configured",
+        "Please set your ElevenLabs API key in config.ts to enable text-to-speech functionality."
+      );
+    }
+  }, []);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    wsServiceRef.current = new WebSocketService(WS_URL);
+    
+    const handleFeedback = (message: FeedbackMessage) => {
+      setLastFeedback(message.data.feedback);
+      if (isTTSEnabled && ttsServiceRef.current) {
+        ttsServiceRef.current.speak(message.data.feedback).catch(console.error);
+      }
+    };
+
+    wsServiceRef.current.addListener('feedback', handleFeedback);
+
+    // Connect to WebSocket
+    wsServiceRef.current.connect()
+      .then(() => {
+        setWsStatus("connected");
+        console.log("WebSocket connected successfully");
+      })
+      .catch((error) => {
+        setWsStatus("error");
+        console.error("WebSocket connection failed:", error);
+      });
+
+    return () => {
+      if (wsServiceRef.current) {
+        wsServiceRef.current.removeListener('feedback', handleFeedback);
+        wsServiceRef.current.disconnect();
+      }
+    };
+  }, [isTTSEnabled]);
+
+  // Camera polling effect
   useEffect(() => {
     let alive = true;
     const loop = async () => {
@@ -100,6 +157,56 @@ export default function StatusScreen() {
             ) : (
               <Text style={styles.cameraPlaceholder}>Connecting to camera…</Text>
             )}
+          </View>
+        </View>
+
+        {/* ---- TTS Status Card ---- */}
+        <View style={styles.ttsContainer}>
+          <Text style={styles.sectionTitle}>Voice Feedback</Text>
+          <View style={styles.statusRow}>
+            <Text style={styles.statusLabel}>WebSocket:</Text>
+            <Text style={[styles.statusValue, { color: wsStatus === "connected" ? "#4CAF50" : "#f44336" }]}>
+              {wsStatus}
+            </Text>
+          </View>
+          <View style={styles.statusRow}>
+            <Text style={styles.statusLabel}>TTS:</Text>
+            <Text style={[styles.statusValue, { color: isTTSEnabled ? "#4CAF50" : "#f44336" }]}>
+              {isTTSEnabled ? "enabled" : "disabled"}
+            </Text>
+          </View>
+          {lastFeedback && (
+            <View style={styles.feedbackContainer}>
+              <Text style={styles.feedbackLabel}>Last Feedback:</Text>
+              <Text style={styles.feedbackText}>{lastFeedback}</Text>
+            </View>
+          )}
+          <View style={styles.buttonRow}>
+            <TouchableOpacity
+              style={[styles.toggleButton, { backgroundColor: isTTSEnabled ? "#f44336" : "#4CAF50" }]}
+              onPress={() => setIsTTSEnabled(!isTTSEnabled)}
+            >
+              <Text style={styles.toggleButtonText}>
+                {isTTSEnabled ? "Disable TTS" : "Enable TTS"}
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.toggleButton, { backgroundColor: "#2196F3" }]}
+              onPress={async () => {
+                if (ttsServiceRef.current) {
+                  try {
+                    await ttsServiceRef.current.speak("Testing text to speech functionality. This is a test message.");
+                  } catch (error) {
+                    Alert.alert("TTS Test Failed", "Check your API key and internet connection.");
+                  }
+                } else {
+                  Alert.alert("TTS Not Available", "TTS service is not initialized. Check your API key configuration.");
+                }
+              }}
+            >
+              <Text style={styles.toggleButtonText}>Test TTS</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -317,6 +424,75 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   taskFrequency: {
+    fontFamily: "Sixtyfour_400Regular",
+    fontSize: 12,
+    color: "#8b4513",
+    fontWeight: "bold",
+  },
+  ttsContainer: {
+    backgroundColor: "#d2b48c", // Tan like goose feathers
+    marginHorizontal: 20,
+    marginBottom: 30,
+    borderRadius: 0,
+    borderWidth: 2,
+    borderColor: "#8b4513", // Saddle brown border
+    padding: 20,
+    // Pixel shadow effect
+    shadowColor: "#8b4513",
+    shadowOffset: { width: 4, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    elevation: 0,
+  },
+  statusRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  statusLabel: {
+    fontFamily: "Sixtyfour_400Regular",
+    fontSize: 14,
+    color: "#8b4513",
+  },
+  statusValue: {
+    fontFamily: "Sixtyfour_400Regular",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+  feedbackContainer: {
+    marginTop: 15,
+    padding: 10,
+    backgroundColor: "#f5f5f0",
+    borderWidth: 1,
+    borderColor: "#8b4513",
+  },
+  feedbackLabel: {
+    fontFamily: "Sixtyfour_400Regular",
+    fontSize: 12,
+    color: "#8b4513",
+    marginBottom: 5,
+  },
+  feedbackText: {
+    fontFamily: "Sixtyfour_400Regular",
+    fontSize: 12,
+    color: "#8b4513",
+    fontStyle: "italic",
+  },
+  buttonRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginTop: 15,
+  },
+  toggleButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 0,
+    borderWidth: 2,
+    borderColor: "#8b4513",
+    minWidth: 100,
+  },
+  toggleButtonText: {
     fontFamily: "Sixtyfour_400Regular",
     fontSize: 12,
     color: "#8b4513",
