@@ -44,18 +44,18 @@ export default function HomeScreen() {
       <View style={styles.gridBackground}>{renderGrid()}</View>
 
       <View style={styles.content}>
-        <Text style={styles.title}>Title</Text>
+        <Text style={styles.title}>HONCK!</Text>
 
         {/* Image between title and button */}
         <Image
-          source={require("../assets/images/bracketbot256.png")} // replace with your image path
-          style={{width: 256, height: 256, marginTop: -55, marginLeft: 10,}}
+          source={require("../assets/images/totogoose256.png")}
+          style={{width: 256, height: 256, marginTop: -55, marginLeft: 0}}
           resizeMode="contain"
         />
 
         <Link href="/about" asChild>
           <TouchableOpacity style={styles.button}>
-            <Text style={styles.buttonText}>Check My Robot</Text>
+            <Text style={styles.buttonText}>Check My Geese</Text>
           </TouchableOpacity>
         </Link>
       </View>
@@ -66,7 +66,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#2a2a2a",
+    backgroundColor: "#f5f5f0", // Warm off-white like goose feathers
   },
   gridBackground: {
     position: "absolute",
@@ -74,11 +74,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "#2a2a2a",
+    backgroundColor: "#f5f5f0",
   },
   gridLine: {
     position: "absolute",
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    backgroundColor: "rgba(139, 69, 19, 0.1)", // Saddle brown grid lines
   },
   content: {
     flex: 1,
@@ -88,8 +88,8 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: "Sixtyfour_400Regular",
-    fontSize: 32,
-    color: "#ffffff",
+    fontSize: 64,
+    color: "#8b4513", // Saddle brown like goose beak
     marginTop: 100,
   },
   image: {
@@ -98,13 +98,13 @@ const styles = StyleSheet.create({
     marginVertical: 30,
   },
   button: {
-    backgroundColor: "#3a3a3a",
+    backgroundColor: "#d2b48c", // Tan like goose feathers
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderWidth: 2,
-    borderColor: "#ffffff",
+    borderColor: "#8b4513", // Saddle brown border
     borderRadius: 0,
-    shadowColor: "#000000",
+    shadowColor: "#8b4513",
     shadowOffset: { width: 4, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 0,
@@ -114,6 +114,6 @@ const styles = StyleSheet.create({
   buttonText: {
     fontFamily: "Sixtyfour_400Regular",
     fontSize: 16,
-    color: "#ffffff",
+    color: "#8b4513", // Saddle brown text
   },
 });
