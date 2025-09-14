@@ -39,10 +39,23 @@ export class WebSocketService {
 
         this.ws.onmessage = (event) => {
           try {
+            console.log('Raw WebSocket message length:', event.data.length);
+            
+            // Check if it's a camera frame (base64 image data) - these are very long
+            if (event.data.length > 1000 || event.data.startsWith('data:image/jpeg;base64,')) {
+              console.log('Received camera frame, ignoring for TTS');
+              return;
+            }
+            
             const message: WebSocketMessage = JSON.parse(event.data);
+            console.log('📨 Parsed WebSocket message:', message);
+            console.log('📨 Message type:', message.type);
+            console.log('📨 Notifying listeners for type:', message.type);
             this.notifyListeners(message.type, message);
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
+            console.error('Raw data length:', event.data.length);
+            console.error('Raw data preview:', event.data.substring(0, 100));
           }
         };
 
@@ -99,8 +112,14 @@ export class WebSocketService {
 
   private notifyListeners(type: string, message: WebSocketMessage): void {
     const callbacks = this.listeners.get(type);
+    console.log(`📢 Notifying ${callbacks ? callbacks.length : 0} listeners for type: ${type}`);
     if (callbacks) {
-      callbacks.forEach(callback => callback(message));
+      callbacks.forEach((callback, index) => {
+        console.log(`📢 Calling callback ${index} for type: ${type}`);
+        callback(message);
+      });
+    } else {
+      console.log(`📢 No listeners found for type: ${type}`);
     }
   }
 

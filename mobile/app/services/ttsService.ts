@@ -20,21 +20,29 @@ export class TTSService {
 
   async speak(text: string): Promise<void> {
     try {
+      console.log("🎤 TTS Service: Starting to speak:", text);
+      console.log("🎤 TTS Service: API Key available:", !!this.apiKey);
+      console.log("🎤 TTS Service: Voice ID:", this.voiceId);
+      
       // Stop any currently playing audio
       if (this.sound) {
+        console.log("🎤 TTS Service: Stopping previous audio");
         await this.sound.unloadAsync();
         this.sound = null;
       }
 
+      console.log("🎤 TTS Service: Generating speech...");
       // Generate speech using ElevenLabs API
       const audioData = await this.generateSpeech(text);
       
+      console.log("🎤 TTS Service: Creating audio from data URL");
       // Create and play the audio
       const { sound } = await Audio.Sound.createAsync(
         { uri: audioData },
         { shouldPlay: true }
       );
       
+      console.log("🎤 TTS Service: Audio created, starting playback");
       this.sound = sound;
       
       // Clean up when finished
@@ -52,6 +60,9 @@ export class TTSService {
   }
 
   private async generateSpeech(text: string): Promise<string> {
+    console.log("🎤 TTS Service: Calling ElevenLabs API for text:", text);
+    console.log("🎤 TTS Service: Using voice ID:", this.voiceId);
+    
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}`,
       {
@@ -65,8 +76,10 @@ export class TTSService {
           text: text,
           model_id: this.modelId,
           voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.5,
+            stability: 0.3,
+            similarity_boost: 0.8,
+            style: 0.8,
+            use_speaker_boost: true,
           },
         }),
       }
