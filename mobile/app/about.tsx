@@ -1,17 +1,61 @@
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Image } from "react-native";
+import { useEffect, useRef, useState } from "react";
 import { useFonts, Sixtyfour_400Regular } from "@expo-google-fonts/sixtyfour";
+import { BACKEND_URL, WS_URL } from "./config";
 
 export default function StatusScreen() {
   let [fontsLoaded] = useFonts({
     Sixtyfour_400Regular,
   });
 
+  // ---- Camera WebSocket + polling fallback ----
+  const [frameUri, setFrameUri] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    // Prefer WebSocket stream
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onmessage = (evt) => {
+      const uri = String(evt.data); // already data URL: "data:image/jpeg;base64,..."
+      setFrameUri(uri);
+    };
+
+    // If the socket errors (or Expo Go can’t use WS over LAN), fall back to HTTP polling
+    ws.onerror = () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      let alive = true;
+      const poll = async () => {
+        while (alive) {
+          try {
+            const uri = `${BACKEND_URL}/frame.jpg?ts=${Date.now()}`; // cache-buster
+            setFrameUri(uri);
+          } catch {}
+          await new Promise((r) => setTimeout(r, 250)); // ~4 fps
+        }
+      };
+      poll();
+      return () => {
+        alive = false;
+      };
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, []);
+
   if (!fontsLoaded) {
     return null;
   }
-  
+
   // Battery percentage for conditional formatting
-  const batteryPercentage = 100; // This would come from your robot's actual battery data
+  const batteryPercentage = 100; // Placeholder for now
 
   const getBatteryColor = (percentage: number) => {
     if (percentage <= 20) return "#ff4444"; // Red
@@ -19,23 +63,20 @@ export default function StatusScreen() {
     return "#44ff44"; // Green
   };
 
-  // Format cleaning time to show hours and minutes
   const formatCleaningTime = (totalMinutes: number) => {
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
     return `${hours}hr ${minutes}m`;
   };
 
-  // Example: 125 minutes = 2hr 5m
-  const cleaningTimeMinutes = 125; // This would come from your robot's actual cleaning time
+  const cleaningTimeMinutes = 125; // Placeholder
 
-  // Create grid pattern
   const renderGrid = () => {
     const gridLines = [];
     const gridSize = 20;
     const screenWidth = 400; // Approximate screen width
     const screenHeight = 800; // Approximate screen height
-    
+
     // Vertical lines
     for (let i = 0; i <= screenWidth; i += gridSize) {
       gridLines.push(
@@ -53,7 +94,7 @@ export default function StatusScreen() {
         />
       );
     }
-    
+
     // Horizontal lines
     for (let i = 0; i <= screenHeight; i += gridSize) {
       gridLines.push(
@@ -71,80 +112,90 @@ export default function StatusScreen() {
         />
       );
     }
-    
+
     return gridLines;
   };
 
   return (
     <View style={styles.container}>
-      <View style={styles.gridBackground}>
-        {renderGrid()}
-      </View>
+      <View style={styles.gridBackground}>{renderGrid()}</View>
       <ScrollView style={styles.scrollContainer}>
         <View style={styles.header}>
           <Text style={styles.title}>Status</Text>
         </View>
-      
-      <View style={styles.cameraContainer}>
-        <Text style={styles.sectionTitle}>Goose Camera Feed</Text>
-        <View style={styles.cameraFeed}>
-          <Text style={styles.cameraPlaceholder}>
-            Camera feed will appear here
-          </Text>
-        </View>
-      </View>
-      
-      
-      <View style={styles.summaryContainer}>
-        <Text style={styles.sectionTitle}>End of Day Summary</Text>
-        
-        <View style={styles.pieChartContainer}>
-          <Text style={styles.chartTitle}>Productivity Analysis</Text>
-          <View style={styles.pieChart}>
-            <View style={[styles.pieSlice, styles.productiveSlice]} />
-            <View style={[styles.pieSlice, styles.unproductiveSlice]} />
+
+        {/* ---- Camera Card ---- */}
+        <View style={styles.cameraContainer}>
+          <Text style={styles.sectionTitle}>Goose Camera Feed</Text>
+          <View style={styles.cameraFeed}>
+            {frameUri ? (
+              <Image
+                source={{ uri: frameUri }}
+                style={{ width: "100%", height: "100%" }}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={styles.cameraPlaceholder}>Connecting to camera…</Text>
+            )}
           </View>
-          <View style={styles.chartLegend}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendColor, { backgroundColor: "#4CAF50" }]} />
-              <Text style={styles.legendText}>Productive (50%)</Text>
+        </View>
+
+        {/* ---- Summary Card (unchanged placeholders) ---- */}
+        <View style={styles.summaryContainer}>
+          <Text style={styles.sectionTitle}>End of Day Summary</Text>
+
+          <View style={styles.pieChartContainer}>
+            <Text style={styles.chartTitle}>Productivity Analysis</Text>
+            <View style={styles.pieChart}>
+              <View style={[styles.pieSlice, styles.productiveSlice]} />
+              <View style={[styles.pieSlice, styles.unproductiveSlice]} />
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendColor, { backgroundColor: "#f44336" }]} />
-              <Text style={styles.legendText}>Unproductive (50%)</Text>
+            <View style={styles.chartLegend}>
+              <View style={styles.legendItem}>
+                <View
+                  style={[styles.legendColor, { backgroundColor: "#4CAF50" }]}
+                />
+                <Text style={styles.legendText}>Productive (50%)</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View
+                  style={[styles.legendColor, { backgroundColor: "#f44336" }]}
+                />
+                <Text style={styles.legendText}>Unproductive (50%)</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.tasksContainer}>
+            <Text style={styles.chartTitle}>Top 5 Detected Activities</Text>
+            <View style={styles.taskItem}>
+              <Text style={styles.taskText}>This person is gaming</Text>
+              <Text style={styles.taskFrequency}>23</Text>
+            </View>
+            <View style={styles.taskItem}>
+              <Text style={styles.taskText}>This person is sitting down</Text>
+              <Text style={styles.taskFrequency}>18</Text>
+            </View>
+            <View style={styles.taskItem}>
+              <Text style={styles.taskText}>This person is typing</Text>
+              <Text style={styles.taskFrequency}>15</Text>
+            </View>
+            <View style={styles.taskItem}>
+              <Text style={styles.taskText}>This person is eating</Text>
+              <Text style={styles.taskFrequency}>12</Text>
+            </View>
+            <View style={styles.taskItem}>
+              <Text style={styles.taskText}>This person is sleeping</Text>
+              <Text style={styles.taskFrequency}>8</Text>
             </View>
           </View>
         </View>
-        
-        <View style={styles.tasksContainer}>
-          <Text style={styles.chartTitle}>Top 5 Detected Activities</Text>
-          <View style={styles.taskItem}>
-            <Text style={styles.taskText}>This person is gaming</Text>
-            <Text style={styles.taskFrequency}>23</Text>
-          </View>
-          <View style={styles.taskItem}>
-            <Text style={styles.taskText}>This person is sitting down</Text>
-            <Text style={styles.taskFrequency}>18</Text>
-          </View>
-          <View style={styles.taskItem}>
-            <Text style={styles.taskText}>This person is typing</Text>
-            <Text style={styles.taskFrequency}>15</Text>
-          </View>
-          <View style={styles.taskItem}>
-            <Text style={styles.taskText}>This person is eating</Text>
-            <Text style={styles.taskFrequency}>12</Text>
-          </View>
-          <View style={styles.taskItem}>
-            <Text style={styles.taskText}>This person is sleeping</Text>
-            <Text style={styles.taskFrequency}>8</Text>
-          </View>
-        </View>
-      </View>
       </ScrollView>
     </View>
   );
 }
 
+/* ----- Styles (unchanged from your file) ----- */
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -322,3 +373,4 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 });
+
