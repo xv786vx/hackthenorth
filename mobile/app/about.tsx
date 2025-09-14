@@ -1,52 +1,30 @@
 import { View, Text, StyleSheet, ScrollView, Image } from "react-native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useFonts, Sixtyfour_400Regular } from "@expo-google-fonts/sixtyfour";
-import { BACKEND_URL, WS_URL } from "./config";
+import { BACKEND_URL } from "./config";
 
 export default function StatusScreen() {
   let [fontsLoaded] = useFonts({
     Sixtyfour_400Regular,
   });
 
-  // ---- Camera WebSocket + polling fallback ----
+  // ---- Camera: force HTTP polling for reliability on any Wi-Fi ----
   const [frameUri, setFrameUri] = useState<string | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [connStatus, setConnStatus] = useState("polling /frame.jpg …");
 
   useEffect(() => {
-    // Prefer WebSocket stream
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onmessage = (evt) => {
-      const uri = String(evt.data); // already data URL: "data:image/jpeg;base64,..."
-      setFrameUri(uri);
-    };
-
-    // If the socket errors (or Expo Go can’t use WS over LAN), fall back to HTTP polling
-    ws.onerror = () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+    let alive = true;
+    const loop = async () => {
+      setConnStatus("polling /frame.jpg …");
+      while (alive) {
+        // cache-buster avoids stale images
+        setFrameUri(`${BACKEND_URL}/frame.jpg?ts=${Date.now()}`);
+        await new Promise((r) => setTimeout(r, 125)); // ~8 fps
       }
-      let alive = true;
-      const poll = async () => {
-        while (alive) {
-          try {
-            const uri = `${BACKEND_URL}/frame.jpg?ts=${Date.now()}`; // cache-buster
-            setFrameUri(uri);
-          } catch {}
-          await new Promise((r) => setTimeout(r, 250)); // ~4 fps
-        }
-      };
-      poll();
-      return () => {
-        alive = false;
-      };
     };
-
+    loop();
     return () => {
-      ws.close();
-      wsRef.current = null;
+      alive = false;
     };
   }, []);
 
@@ -54,8 +32,8 @@ export default function StatusScreen() {
     return null;
   }
 
-  // Battery percentage for conditional formatting
-  const batteryPercentage = 100; // Placeholder for now
+  // Battery percentage for conditional formatting (placeholder)
+  const batteryPercentage = 100;
 
   const getBatteryColor = (percentage: number) => {
     if (percentage <= 20) return "#ff4444"; // Red
@@ -77,38 +55,20 @@ export default function StatusScreen() {
     const screenWidth = 400; // Approximate screen width
     const screenHeight = 800; // Approximate screen height
 
-    // Vertical lines
     for (let i = 0; i <= screenWidth; i += gridSize) {
       gridLines.push(
         <View
           key={`v-${i}`}
-          style={[
-            styles.gridLine,
-            {
-              left: i,
-              top: 0,
-              width: 1,
-              height: screenHeight,
-            },
-          ]}
+          style={[styles.gridLine, { left: i, top: 0, width: 1, height: screenHeight }]}
         />
       );
     }
 
-    // Horizontal lines
     for (let i = 0; i <= screenHeight; i += gridSize) {
       gridLines.push(
         <View
           key={`h-${i}`}
-          style={[
-            styles.gridLine,
-            {
-              left: 0,
-              top: i,
-              width: screenWidth,
-              height: 1,
-            },
-          ]}
+          style={[styles.gridLine, { left: 0, top: i, width: screenWidth, height: 1 }]}
         />
       );
     }
@@ -127,6 +87,9 @@ export default function StatusScreen() {
         {/* ---- Camera Card ---- */}
         <View style={styles.cameraContainer}>
           <Text style={styles.sectionTitle}>Goose Camera Feed</Text>
+          <Text style={{ color: "#8b4513", marginBottom: 6, fontFamily: "Sixtyfour_400Regular", fontSize: 12 }}>
+            {connStatus}
+          </Text>
           <View style={styles.cameraFeed}>
             {frameUri ? (
               <Image
@@ -140,7 +103,7 @@ export default function StatusScreen() {
           </View>
         </View>
 
-        {/* ---- Summary Card (unchanged placeholders) ---- */}
+        {/* ---- Summary Card (placeholders) ---- */}
         <View style={styles.summaryContainer}>
           <Text style={styles.sectionTitle}>End of Day Summary</Text>
 
@@ -152,15 +115,11 @@ export default function StatusScreen() {
             </View>
             <View style={styles.chartLegend}>
               <View style={styles.legendItem}>
-                <View
-                  style={[styles.legendColor, { backgroundColor: "#4CAF50" }]}
-                />
+                <View style={[styles.legendColor, { backgroundColor: "#4CAF50" }]} />
                 <Text style={styles.legendText}>Productive (50%)</Text>
               </View>
               <View style={styles.legendItem}>
-                <View
-                  style={[styles.legendColor, { backgroundColor: "#f44336" }]}
-                />
+                <View style={[styles.legendColor, { backgroundColor: "#f44336" }]} />
                 <Text style={styles.legendText}>Unproductive (50%)</Text>
               </View>
             </View>
@@ -195,7 +154,7 @@ export default function StatusScreen() {
   );
 }
 
-/* ----- Styles (unchanged from your file) ----- */
+/* ----- Styles (from your original) ----- */
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -243,10 +202,7 @@ const styles = StyleSheet.create({
     padding: 20,
     // Pixel shadow effect
     shadowColor: "#8b4513",
-    shadowOffset: {
-      width: 4,
-      height: 4,
-    },
+    shadowOffset: { width: 4, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 0,
     elevation: 0,
@@ -261,10 +217,7 @@ const styles = StyleSheet.create({
     borderColor: "#8b4513", // Saddle brown border
     // Pixel shadow effect
     shadowColor: "#8b4513",
-    shadowOffset: {
-      width: 4,
-      height: 4,
-    },
+    shadowOffset: { width: 4, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 0,
     elevation: 0,
@@ -285,10 +238,7 @@ const styles = StyleSheet.create({
     padding: 20,
     // Pixel shadow effect
     shadowColor: "#8b4513",
-    shadowOffset: {
-      width: 4,
-      height: 4,
-    },
+    shadowOffset: { width: 4, height: 4 },
     shadowOpacity: 1,
     shadowRadius: 0,
     elevation: 0,
@@ -317,14 +267,14 @@ const styles = StyleSheet.create({
     height: 120,
   },
   productiveSlice: {
-    backgroundColor: "#4CAF50", // Green for productive
+    backgroundColor: "#4CAF50",
     left: 0,
     top: 0,
     borderTopLeftRadius: 60,
     borderBottomLeftRadius: 60,
   },
   unproductiveSlice: {
-    backgroundColor: "#f44336", // Red for unproductive
+    backgroundColor: "#f44336",
     right: 0,
     top: 0,
     borderTopRightRadius: 60,
@@ -373,4 +323,3 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 });
-

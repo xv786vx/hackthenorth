@@ -4,27 +4,39 @@ import io
 import threading
 import time
 from typing import Optional
+from pathlib import Path
+from time import sleep
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from picamera2 import Picamera2
 from PIL import Image
-import numpy as np
+from picamera2.encoders import H264Encoder
+from picamera2.outputs import FfmpegOutput
+import asyncio
 
 app = FastAPI()
 
-# --- CORS so the Expo app (phone) can hit this from LAN ---
+# Allow Expo app on LAN to connect (loosened for hack/demo)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Camera manager (single instance) ---
+# --- Simple HTTP request logging (helps debugging) ---
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    print(f"[REQ] {request.client.host} {request.method} {request.url.path}")
+    resp = await call_next(request)
+    print(f"[RESP] {request.url.path} -> {resp.status_code}")
+    return resp
+
+# --- Camera manager: runs one camera and keeps the last JPEG in memory ---
 class CameraManager:
-    def __init__(self, size=(640, 480), fps=6):
+    def __init__(self, size=(640, 480), fps=8):
         self.picam2 = Picamera2()
         self.picam2.configure(
             self.picam2.create_preview_configuration(
@@ -51,7 +63,7 @@ class CameraManager:
                 with self._lock:
                     self._last_jpeg = jpeg_bytes
             except Exception as e:
-                # Avoid spam; small sleep then retry
+                # avoid log spam; backoff briefly
                 time.sleep(0.1)
             time.sleep(frame_interval)
 
@@ -66,22 +78,29 @@ class CameraManager:
         except Exception:
             pass
 
-camera = CameraManager(size=(640, 480), fps=6)
+camera = CameraManager(size=(640, 480), fps=8)
 
-# --- Simple health ---
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# --- Latest frame as JPEG (good for polling) ---
+# Uncacheable latest frame for HTTP polling from Expo app
 @app.get("/frame.jpg")
 def frame_jpg():
     data = camera.get_jpeg()
     if not data:
         return Response(content=b"", media_type="image/jpeg", status_code=503)
-    return Response(content=data, media_type="image/jpeg")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
-# --- WebSocket: streams base64 JPEG frames ---
+# Optional: WebSocket stream (keep for networks that allow it)
 @app.websocket("/ws/camera")
 async def ws_camera(ws: WebSocket):
     await ws.accept()
@@ -89,24 +108,13 @@ async def ws_camera(ws: WebSocket):
         while True:
             data = camera.get_jpeg()
             if data:
-                # Send as data URL (base64) so the RN app can set <Image source={{uri}} />
                 b64 = base64.b64encode(data).decode("ascii")
                 await ws.send_text(f"data:image/jpeg;base64,{b64}")
-            await asyncio_sleep(0.16)  # ~6 fps
+            await asyncio.sleep(0.12)  # ~8 fps
     except WebSocketDisconnect:
         pass
 
-# Small asyncio sleep helper (to avoid importing asyncio at top)
-import asyncio
-async def asyncio_sleep(t: float):
-    await asyncio.sleep(t)
-
-# --- Optional: record short MP4 to Desktop ---
-from picamera2.encoders import H264Encoder
-from picamera2.outputs import FfmpegOutput
-from pathlib import Path
-from time import sleep
-
+# Optional: trigger short recording to Desktop
 @app.post("/record")
 def record(seconds: int = Query(5, ge=1, le=60)):
     desktop = Path.home() / "Desktop"
@@ -115,7 +123,6 @@ def record(seconds: int = Query(5, ge=1, le=60)):
 
     enc = H264Encoder(bitrate=5_000_000)
     out = FfmpegOutput(str(out_file))
-    # Reuse running camera; start a temporary recording
     camera.picam2.start_recording(enc, out)
     try:
         sleep(seconds)
@@ -126,12 +133,10 @@ def record(seconds: int = Query(5, ge=1, le=60)):
             pass
     return {"saved": str(out_file), "seconds": seconds}
 
-# --- Graceful shutdown ---
 @app.on_event("shutdown")
 def shutdown_event():
     camera.stop()
 
 if __name__ == "__main__":
     import uvicorn
-    # 0.0.0.0 so phones on LAN can reach it; change port if you like
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
