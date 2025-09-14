@@ -1,4 +1,5 @@
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export interface TTSConfig {
   apiKey: string;
@@ -29,9 +30,8 @@ export class TTSService {
           allowsRecordingIOS: false,
           staysActiveInBackground: false,
           playsInSilentModeIOS: true,
-          interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
+          // Omit interruptionMode* to avoid invalid values on some SDKs
           shouldDuckAndroid: true,
-          interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
           playThroughEarpieceAndroid: false,
         });
       } catch (e) {
@@ -98,19 +98,24 @@ export class TTSService {
         }),
       }
     );
-
+    console.log('🎤 ElevenLabs status:', response.status, response.statusText);
     if (!response.ok) {
+      const errTxt = await response.text().catch(() => '');
+      console.log('🎤 ElevenLabs error body:', errTxt);
       throw new Error(`ElevenLabs API error: ${response.status} ${response.statusText}`);
     }
 
-    // Convert the audio blob to a data URL for expo-av
-    const audioBlob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(audioBlob);
-    });
+    // Save the audio to a file and return file:// URI (more reliable on device)
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    // Convert to base64
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = typeof btoa !== 'undefined' ? btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
+    const fileUri = `${FileSystem.cacheDirectory || ''}tts_${Date.now()}.mp3`;
+    await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+    console.log('🎤 Saved TTS file:', fileUri);
+    return fileUri;
   }
 
   async stop(): Promise<void> {

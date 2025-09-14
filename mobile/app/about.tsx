@@ -1,10 +1,10 @@
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert, Platform } from "react-native";
 import { useEffect, useState, useRef } from "react";
 import { useFonts, Sixtyfour_400Regular } from "@expo-google-fonts/sixtyfour";
 import { BACKEND_URL, WS_URL, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } from "./config";
 import { TTSService } from "./services/ttsService";
 import { WebSocketService, FeedbackMessage } from "./services/websocketService";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { Asset } from "expo-asset";
 
 export default function StatusScreen() {
@@ -21,6 +21,7 @@ export default function StatusScreen() {
   const [lastFeedback, setLastFeedback] = useState<string>("");
   const [isTTSEnabled, setIsTTSEnabled] = useState(true);
   const [isSessionRunning, setIsSessionRunning] = useState(false);
+  const isSessionRunningRef = useRef<boolean>(false);
   const ttsServiceRef = useRef<TTSService | null>(null);
   const wsServiceRef = useRef<WebSocketService | null>(null);
   const lastFeedbackTimestampRef = useRef<number>(0);
@@ -29,12 +30,87 @@ export default function StatusScreen() {
   const speakTimerRef = useRef<NodeJS.Timeout | null>(null);
   const latestAnalysisRef = useRef<string>("");
   const voicesMapRef = useRef<Record<string, string[]>>({});
+  // --- Simple playlist playback ---
+  const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const playlistRef = useRef<string[]>([]);
+  const playlistIndexRef = useRef<number>(0);
 
   const clearSpeakTimer = () => {
     if (speakTimerRef.current) {
       clearTimeout(speakTimerRef.current as unknown as number);
       speakTimerRef.current = null;
     }
+  };
+
+  const clearSessionTimer = () => {
+    if (sessionTimerRef.current) {
+      clearTimeout(sessionTimerRef.current as unknown as number);
+      sessionTimerRef.current = null;
+    }
+  };
+
+  // Load plain list from assets/voices/voice.txt (one line per phrase)
+  const loadVoicesPlaylist = async (): Promise<string[]> => {
+    try {
+      const asset = Asset.fromModule(require("../assets/voices/voice.txt"));
+      await asset.downloadAsync();
+      const uri = asset.localUri || asset.uri;
+      const raw = await FileSystem.readAsStringAsync(uri);
+      return raw
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => !!l && !l.startsWith('#'))
+        .map(l => {
+          const sep = l.indexOf('|');
+          return sep >= 0 ? l.slice(sep + 1).trim() : l;
+        });
+    } catch (e) {
+      console.error('Failed to load playlist voices:', e);
+      return [];
+    }
+  };
+
+  const stopPlaylist = async () => {
+    clearSessionTimer();
+    try { await ttsServiceRef.current?.stop(); } catch {}
+  };
+
+  const startPlaylist = async () => {
+    if (!ttsServiceRef.current) return;
+    if (!playlistRef.current.length) {
+      playlistRef.current = await loadVoicesPlaylist();
+      playlistIndexRef.current = 0;
+    }
+    if (!playlistRef.current.length) {
+      console.warn('No voices in assets/voices/voice.txt; using hardcoded defaults');
+      playlistRef.current = [
+        'Focus now. One tiny step.',
+        'Ship a small task right now.',
+        'Phone down. Eyes on the goal.',
+      ];
+    }
+    console.log('🎵 Playlist ready with', playlistRef.current.length, 'lines');
+    const playNext = async () => {
+      if (!isSessionRunningRef.current) return;
+      const phrasesNow = playlistRef.current;
+      if (!phrasesNow.length) {
+        console.warn('Playlist empty at runtime');
+        return;
+      }
+      const idx = playlistIndexRef.current % phrasesNow.length;
+      const phrase = phrasesNow[idx];
+      console.log('🎵 Speaking index', idx, 'of', phrasesNow.length, '->', phrase);
+      try {
+        await ttsServiceRef.current!.speak(phrase);
+      } catch (e) {
+        console.error('Playlist TTS error:', e);
+      } finally {
+        playlistIndexRef.current = (idx + 1) % phrasesNow.length;
+        sessionTimerRef.current = setTimeout(playNext, 5000) as unknown as NodeJS.Timeout;
+      }
+    };
+    // Start immediately
+    playNext();
   };
 
   const loadVoicesFile = async () => {
@@ -220,8 +296,8 @@ export default function StatusScreen() {
 
   // Feedback polling effect (like camera polling)
   useEffect(() => {
-    if (!isTTSEnabled) {
-      console.log("🎯 TTS is disabled, not polling for feedback");
+    if (!isTTSEnabled || isSessionRunning) {
+      // Silence polling while session is running or TTS disabled
       return;
     }
     
@@ -234,6 +310,11 @@ export default function StatusScreen() {
         try {
           console.log("🎯 Polling feedback from:", `${BACKEND_URL}/feedback/latest`);
           const response = await fetch(`${BACKEND_URL}/feedback/latest?ts=${Date.now()}`);
+          if (response.status === 404) {
+            // Endpoint not available; silently back off
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
           if (response.ok) {
             const json = await response.json();
             console.log("🎯 Feedback latest received:", json);
@@ -245,15 +326,20 @@ export default function StatusScreen() {
               latestFeedbackRef.current = feedbackData.feedback;
               lastFeedbackTimestamp = feedbackData.timestamp;
               lastFeedbackTimestampRef.current = feedbackData.timestamp;
-              scheduleSpeakIn(5000);
+              // If playlist session is NOT running, optionally speak based on backend
+              if (!isSessionRunning) {
+                scheduleSpeakIn(5000);
+              }
             } else {
               console.log("🎯 No new feedback (data present:", !!feedbackData, ")");
             }
           } else {
-            console.error("🎯 Failed to fetch feedback:", response.status, response.statusText);
+            // Non-404 errors can be noisy on poor networks; keep quiet
+            await new Promise((r) => setTimeout(r, 2000));
           }
         } catch (error) {
-          console.error("🎯 Error polling feedback:", error);
+          // Network hiccups expected on mobile; keep quiet
+          await new Promise((r) => setTimeout(r, 2000));
         }
         
         await new Promise((r) => setTimeout(r, 2000)); // Poll every 2 seconds
@@ -287,7 +373,7 @@ export default function StatusScreen() {
         latestAnalysisRef.current = message.data.analysis || "";
         const ts = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
         lastFeedbackTimestampRef.current = ts;
-        if (isSessionRunning) scheduleSpeakIn(5000);
+        // When playlist session is running, do not auto-schedule here
       }
     };
 
@@ -383,22 +469,7 @@ export default function StatusScreen() {
       <ScrollView style={styles.scrollContainer}>
         <View style={styles.header}>
           <Text style={styles.title}>Status</Text>
-          <TouchableOpacity
-            style={{
-              backgroundColor: "#FF0000",
-              padding: 10,
-              margin: 10,
-              borderRadius: 5,
-            }}
-            onPress={() => {
-              console.log("🎯 TOP TEST BUTTON PRESSED!");
-              Alert.alert("SUCCESS!", "Top test button works! The buttons should be working now.");
-            }}
-          >
-            <Text style={{ color: "white", textAlign: "center", fontWeight: "bold" }}>
-              TOP TEST BUTTON
-            </Text>
-          </TouchableOpacity>
+          {/* Top test button removed */}
         </View>
 
         {/* ---- Camera Card ---- */}
@@ -446,15 +517,16 @@ export default function StatusScreen() {
               <TouchableOpacity
                 style={[styles.debugButton, { backgroundColor: isSessionRunning ? "#f44336" : "#4CAF50" }]}
                 onPress={async () => {
-                  if (!voicesMapRef.current || Object.keys(voicesMapRef.current).length === 0) {
-                    await loadVoicesFile();
-                  }
+                  console.log('🎛️ Start/Stop Session pressed. Current:', isSessionRunning);
                   const next = !isSessionRunning;
+                  isSessionRunningRef.current = next;
                   setIsSessionRunning(next);
                   if (next) {
-                    scheduleSpeakIn(5000);
+                    console.log('🎛️ Starting playlist…');
+                    await startPlaylist();
                   } else {
-                    clearSpeakTimer();
+                    console.log('🎛️ Stopping playlist…');
+                    await stopPlaylist();
                   }
                 }}
               >
@@ -735,10 +807,10 @@ const styles = StyleSheet.create({
   },
   debugContainer: {
     marginTop: 15,
-    padding: 15,
-    backgroundColor: "#f0f0f0",
-    borderWidth: 2,
-    borderColor: "#8b4513",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderColor: "transparent",
   },
   debugTitle: {
     fontFamily: "Sixtyfour_400Regular",
