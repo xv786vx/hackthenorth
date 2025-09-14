@@ -20,6 +20,9 @@ export default function StatusScreen() {
   const [isTTSEnabled, setIsTTSEnabled] = useState(true);
   const ttsServiceRef = useRef<TTSService | null>(null);
   const wsServiceRef = useRef<WebSocketService | null>(null);
+  const lastFeedbackTimestampRef = useRef<number>(0);
+  const lastSpokenTimestampRef = useRef<number>(0);
+  const latestFeedbackRef = useRef<string>("");
 
   // Initialize TTS service
   useEffect(() => {
@@ -27,7 +30,7 @@ export default function StatusScreen() {
     console.log("🎤 API Key:", ELEVENLABS_API_KEY ? "Available" : "Missing");
     console.log("🎤 Voice ID:", ELEVENLABS_VOICE_ID);
     
-    if (ELEVENLABS_API_KEY && ELEVENLABS_API_KEY !== "your_elevenlabs_api_key_here") {
+    if (ELEVENLABS_API_KEY && ELEVENLABS_API_KEY.length > 20) {
       ttsServiceRef.current = new TTSService({
         apiKey: ELEVENLABS_API_KEY,
         voiceId: ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB",
@@ -71,18 +74,9 @@ export default function StatusScreen() {
               console.log("🎯 NEW FEEDBACK DETECTED:", feedbackData.feedback);
               console.log("🎯 Timestamp:", feedbackData.timestamp, "Last:", lastFeedbackTimestamp);
               setLastFeedback(feedbackData.feedback);
-              
-              // Speak the feedback
-              if (ttsServiceRef.current) {
-                console.log("🎯 Calling TTS service to speak:", feedbackData.feedback);
-                ttsServiceRef.current.speak(feedbackData.feedback).catch((error) => {
-                  console.error("🎯 TTS Error:", error);
-                });
-              } else {
-                console.error("🎯 TTS Service not available!");
-              }
-              
+              latestFeedbackRef.current = feedbackData.feedback;
               lastFeedbackTimestamp = feedbackData.timestamp;
+              lastFeedbackTimestampRef.current = feedbackData.timestamp;
             } else {
               console.log("🎯 No new feedback (feedback:", !!feedbackData.feedback, "timestamp:", feedbackData.timestamp, "last:", lastFeedbackTimestamp, "is_new:", feedbackData.is_new);
             }
@@ -105,20 +99,42 @@ export default function StatusScreen() {
     };
   }, [isTTSEnabled]);
 
+  // Interval speech scheduler: speak latest feedback every 10s if new since last spoken
+  useEffect(() => {
+    let intervalId: any = null;
+    if (isTTSEnabled) {
+      intervalId = setInterval(async () => {
+        try {
+          const hasNew = lastFeedbackTimestampRef.current > lastSpokenTimestampRef.current;
+          const text = latestFeedbackRef.current;
+          if (ttsServiceRef.current && hasNew && text) {
+            console.log("⏱️ Speaking feedback on interval:", text);
+            await ttsServiceRef.current.speak(text);
+            lastSpokenTimestampRef.current = lastFeedbackTimestampRef.current;
+          } else {
+            console.log("⏱️ No new feedback to speak (hasNew:", hasNew, ")");
+          }
+        } catch (e) {
+          console.error("⏱️ Interval TTS error:", e);
+        }
+      }, 10000); // 10 seconds
+    }
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [isTTSEnabled]);
+
   // Initialize WebSocket connection
   useEffect(() => {
     wsServiceRef.current = new WebSocketService(WS_URL);
     
-    const handleFeedback = (message: FeedbackMessage) => {
+    const handleFeedback = (message: any) => {
       console.log("🎯 FEEDBACK RECEIVED:", message);
-      setLastFeedback(message.data.feedback);
-      if (isTTSEnabled && ttsServiceRef.current) {
-        console.log("🔊 SPEAKING:", message.data.feedback);
-        ttsServiceRef.current.speak(message.data.feedback).catch(console.error);
-      } else {
-        console.log("🔇 TTS DISABLED OR NOT AVAILABLE");
-        console.log("TTS Enabled:", isTTSEnabled);
-        console.log("TTS Service:", ttsServiceRef.current);
+      if (message.type === 'feedback' && message.data && message.data.feedback) {
+        setLastFeedback(message.data.feedback);
+        latestFeedbackRef.current = message.data.feedback;
+        const ts = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
+        lastFeedbackTimestampRef.current = ts;
       }
     };
 
@@ -214,6 +230,22 @@ export default function StatusScreen() {
       <ScrollView style={styles.scrollContainer}>
         <View style={styles.header}>
           <Text style={styles.title}>Status</Text>
+          <TouchableOpacity
+            style={{
+              backgroundColor: "#FF0000",
+              padding: 10,
+              margin: 10,
+              borderRadius: 5,
+            }}
+            onPress={() => {
+              console.log("🎯 TOP TEST BUTTON PRESSED!");
+              Alert.alert("SUCCESS!", "Top test button works! The buttons should be working now.");
+            }}
+          >
+            <Text style={{ color: "white", textAlign: "center", fontWeight: "bold" }}>
+              TOP TEST BUTTON
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* ---- Camera Card ---- */}
@@ -264,7 +296,11 @@ export default function StatusScreen() {
             <View style={styles.buttonRow}>
               <TouchableOpacity
                 style={[styles.debugButton, { backgroundColor: isTTSEnabled ? "#f44336" : "#4CAF50" }]}
-                onPress={() => setIsTTSEnabled(!isTTSEnabled)}
+                onPress={() => {
+                  console.log("🎯 Toggle TTS button pressed, current state:", isTTSEnabled);
+                  Alert.alert("Button Works!", `TTS is currently ${isTTSEnabled ? "enabled" : "disabled"}`);
+                  setIsTTSEnabled(!isTTSEnabled);
+                }}
               >
                 <Text style={styles.debugButtonText}>
                   {isTTSEnabled ? "Disable TTS" : "Enable TTS"}
