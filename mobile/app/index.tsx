@@ -44,9 +44,14 @@ export default function HomeScreen() {
       <View style={styles.gridBackground}>{renderGrid()}</View>
 
       <View style={styles.content}>
-        <Text style={styles.title}>HONCK!</Text>
+        {/* Title image */}
+        <Image
+          source={require("../assets/images/honcktext288.png")}
+          style={styles.titleImage}
+          resizeMode="contain"
+        />
 
-        {/* Image between title and button */}
+        {/* Goose image between title and button */}
         <Image
           source={require("../assets/images/totogoose256.png")}
           style={{width: 256, height: 256, marginTop: -55, marginLeft: 0}}
@@ -86,11 +91,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 50,
   },
-  title: {
-    fontFamily: "Sixtyfour_400Regular",
-    fontSize: 64,
-    color: "#8b4513", // Saddle brown like goose beak
-    marginTop: 100,
+  titleImage: {
+    width: 400,
+    height: 140,
+    marginTop:40,
   },
   image: {
     width: 200,
