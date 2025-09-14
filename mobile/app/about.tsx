@@ -4,6 +4,8 @@ import { useFonts, Sixtyfour_400Regular } from "@expo-google-fonts/sixtyfour";
 import { BACKEND_URL, WS_URL, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID } from "./config";
 import { TTSService } from "./services/ttsService";
 import { WebSocketService, FeedbackMessage } from "./services/websocketService";
+import * as FileSystem from "expo-file-system";
+import { Asset } from "expo-asset";
 
 export default function StatusScreen() {
   let [fontsLoaded] = useFonts({
@@ -18,11 +20,104 @@ export default function StatusScreen() {
   const [wsStatus, setWsStatus] = useState("disconnected");
   const [lastFeedback, setLastFeedback] = useState<string>("");
   const [isTTSEnabled, setIsTTSEnabled] = useState(true);
+  const [isSessionRunning, setIsSessionRunning] = useState(false);
   const ttsServiceRef = useRef<TTSService | null>(null);
   const wsServiceRef = useRef<WebSocketService | null>(null);
   const lastFeedbackTimestampRef = useRef<number>(0);
   const lastSpokenTimestampRef = useRef<number>(0);
   const latestFeedbackRef = useRef<string>("");
+  const speakTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestAnalysisRef = useRef<string>("");
+  const voicesMapRef = useRef<Record<string, string[]>>({});
+
+  const clearSpeakTimer = () => {
+    if (speakTimerRef.current) {
+      clearTimeout(speakTimerRef.current as unknown as number);
+      speakTimerRef.current = null;
+    }
+  };
+
+  const loadVoicesFile = async () => {
+    try {
+      const asset = Asset.fromModule(require("./assets/voices.txt"));
+      await asset.downloadAsync();
+      const uri = asset.localUri || asset.uri;
+      const content = await FileSystem.readAsStringAsync(uri);
+      const map: Record<string, string[]> = {};
+      content.split(/\r?\n/).forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) return;
+        const sep = trimmed.indexOf("|");
+        if (sep === -1) return;
+        const category = trimmed.slice(0, sep).trim().toLowerCase();
+        const phrase = trimmed.slice(sep + 1).trim();
+        if (!map[category]) map[category] = [];
+        map[category].push(phrase);
+      });
+      voicesMapRef.current = map;
+      console.log("🗣️ Loaded voices.txt categories:", Object.keys(map));
+    } catch (e) {
+      console.error("❌ Failed to load voices.txt:", e);
+    }
+  };
+
+  const choosePhraseForLatest = (): string | null => {
+    const analysis = (latestAnalysisRef.current || latestFeedbackRef.current || "").toLowerCase();
+    const map = voicesMapRef.current;
+    const pick = (cat: string) => {
+      const arr = map[cat];
+      if (!arr || arr.length === 0) return null;
+      const idx = Math.floor(Math.random() * arr.length);
+      return arr[idx];
+    };
+    if (/phone|mobile|scroll|instagram|tiktok|doom/.test(analysis)) {
+      return pick("phone") || pick("doomscroll") || pick("sassy") || latestFeedbackRef.current || null;
+    }
+    if (/gaming|game|controller|console/.test(analysis)) {
+      return pick("gaming") || pick("sassy") || latestFeedbackRef.current || null;
+    }
+    if (/sleep|lying|bed/.test(analysis)) {
+      return pick("sleeping") || pick("unproductive") || latestFeedbackRef.current || null;
+    }
+    if (/work|laptop|typing|study|studying|writing|coding|clean|cook/.test(analysis)) {
+      return pick("productive") || pick("encourage") || latestFeedbackRef.current || null;
+    }
+    return pick("sassy") || pick("general") || latestFeedbackRef.current || null;
+  };
+
+  const scheduleSpeakIn = (delayMs: number) => {
+    clearSpeakTimer();
+    speakTimerRef.current = setTimeout(async () => {
+      try {
+        const phrase = choosePhraseForLatest();
+        if (!isSessionRunning || !isTTSEnabled || !ttsServiceRef.current || !phrase) {
+          console.log("⏱️ Skip speaking (session/enabled/service/text):", isSessionRunning, isTTSEnabled, !!ttsServiceRef.current, !!phrase);
+        } else {
+          console.log("⏱️ Speaking (scheduled):", phrase);
+          await ttsServiceRef.current.speak(phrase);
+          lastSpokenTimestampRef.current = lastFeedbackTimestampRef.current || Date.now();
+        }
+      } catch (e) {
+        console.error("⏱️ Scheduled TTS error:", e);
+      } finally {
+        const nextMs = 7000 + Math.floor(Math.random() * 8000);
+        speakTimerRef.current = setTimeout(async () => {
+          try {
+            const again = choosePhraseForLatest();
+            if (isSessionRunning && isTTSEnabled && ttsServiceRef.current && again) {
+              console.log("⏱️ Speaking (repeat):", again, "in", nextMs, "ms");
+              await ttsServiceRef.current.speak(again);
+              lastSpokenTimestampRef.current = lastFeedbackTimestampRef.current || Date.now();
+            } else {
+              console.log("⏱️ Repeat skipped");
+            }
+          } catch (err) {
+            console.error("⏱️ Repeat TTS error:", err);
+          }
+        }, nextMs) as unknown as NodeJS.Timeout;
+      }
+    }, delayMs) as unknown as NodeJS.Timeout;
+  };
 
   // Initialize TTS service
   useEffect(() => {
@@ -59,26 +154,22 @@ export default function StatusScreen() {
     const pollFeedback = async () => {
       while (alive) {
         try {
-          console.log("🎯 Polling feedback from:", `${BACKEND_URL}/feedback.json`);
-          const response = await fetch(`${BACKEND_URL}/feedback.json?ts=${Date.now()}`);
-          
+          console.log("🎯 Polling feedback from:", `${BACKEND_URL}/feedback/latest`);
+          const response = await fetch(`${BACKEND_URL}/feedback/latest?ts=${Date.now()}`);
           if (response.ok) {
-            const feedbackData = await response.json();
-            console.log("🎯 Feedback data received:", feedbackData);
-            
-            // Check if this is new feedback
-            if (feedbackData.feedback && 
-                feedbackData.timestamp > lastFeedbackTimestamp && 
-                feedbackData.is_new) {
-              
+            const json = await response.json();
+            console.log("🎯 Feedback latest received:", json);
+            const feedbackData = json && json.success && json.data ? json.data : null;
+            if (feedbackData && feedbackData.feedback && feedbackData.timestamp > lastFeedbackTimestamp) {
               console.log("🎯 NEW FEEDBACK DETECTED:", feedbackData.feedback);
               console.log("🎯 Timestamp:", feedbackData.timestamp, "Last:", lastFeedbackTimestamp);
               setLastFeedback(feedbackData.feedback);
               latestFeedbackRef.current = feedbackData.feedback;
               lastFeedbackTimestamp = feedbackData.timestamp;
               lastFeedbackTimestampRef.current = feedbackData.timestamp;
+              scheduleSpeakIn(5000);
             } else {
-              console.log("🎯 No new feedback (feedback:", !!feedbackData.feedback, "timestamp:", feedbackData.timestamp, "last:", lastFeedbackTimestamp, "is_new:", feedbackData.is_new);
+              console.log("🎯 No new feedback (data present:", !!feedbackData, ")");
             }
           } else {
             console.error("🎯 Failed to fetch feedback:", response.status, response.statusText);
@@ -99,29 +190,11 @@ export default function StatusScreen() {
     };
   }, [isTTSEnabled]);
 
-  // Interval speech scheduler: speak latest feedback every 10s if new since last spoken
+  // Clear timers when disabling TTS
   useEffect(() => {
-    let intervalId: any = null;
-    if (isTTSEnabled) {
-      intervalId = setInterval(async () => {
-        try {
-          const hasNew = lastFeedbackTimestampRef.current > lastSpokenTimestampRef.current;
-          const text = latestFeedbackRef.current;
-          if (ttsServiceRef.current && hasNew && text) {
-            console.log("⏱️ Speaking feedback on interval:", text);
-            await ttsServiceRef.current.speak(text);
-            lastSpokenTimestampRef.current = lastFeedbackTimestampRef.current;
-          } else {
-            console.log("⏱️ No new feedback to speak (hasNew:", hasNew, ")");
-          }
-        } catch (e) {
-          console.error("⏱️ Interval TTS error:", e);
-        }
-      }, 10000); // 10 seconds
+    if (!isTTSEnabled) {
+      clearSpeakTimer();
     }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
   }, [isTTSEnabled]);
 
   // Initialize WebSocket connection
@@ -133,8 +206,10 @@ export default function StatusScreen() {
       if (message.type === 'feedback' && message.data && message.data.feedback) {
         setLastFeedback(message.data.feedback);
         latestFeedbackRef.current = message.data.feedback;
+        latestAnalysisRef.current = message.data.analysis || "";
         const ts = typeof message.timestamp === 'number' ? message.timestamp : Date.now();
         lastFeedbackTimestampRef.current = ts;
+        if (isSessionRunning) scheduleSpeakIn(5000);
       }
     };
 
@@ -288,206 +363,24 @@ export default function StatusScreen() {
               <Text style={styles.feedbackText}>{lastFeedback}</Text>
             </View>
           )}
-          {/* Debug Buttons - Organized in rows */}
           <View style={styles.debugContainer}>
-            <Text style={styles.debugTitle}>Debug Controls</Text>
-            
-            {/* First row - TTS controls */}
             <View style={styles.buttonRow}>
               <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: isTTSEnabled ? "#f44336" : "#4CAF50" }]}
-                onPress={() => {
-                  console.log("🎯 Toggle TTS button pressed, current state:", isTTSEnabled);
-                  Alert.alert("Button Works!", `TTS is currently ${isTTSEnabled ? "enabled" : "disabled"}`);
-                  setIsTTSEnabled(!isTTSEnabled);
-                }}
-              >
-                <Text style={styles.debugButtonText}>
-                  {isTTSEnabled ? "Disable TTS" : "Enable TTS"}
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#2196F3" }]}
+                style={[styles.debugButton, { backgroundColor: isSessionRunning ? "#f44336" : "#4CAF50" }]}
                 onPress={async () => {
-                  console.log("🎤 Test TTS button pressed");
-                  console.log("🎤 TTS Service available:", !!ttsServiceRef.current);
-                  
-                  if (ttsServiceRef.current) {
-                    try {
-                      console.log("🎤 Calling TTS service directly...");
-                      await ttsServiceRef.current.speak("EXCELLENT! You are being incredibly productive right now! This is a test of the dramatic productivity feedback system!");
-                      console.log("🎤 TTS test completed successfully");
-                    } catch (error) {
-                      console.error("🎤 TTS Test Failed:", error);
-                      Alert.alert("TTS Test Failed", "Check your API key and internet connection.");
-                    }
+                  if (!voicesMapRef.current || Object.keys(voicesMapRef.current).length === 0) {
+                    await loadVoicesFile();
+                  }
+                  const next = !isSessionRunning;
+                  setIsSessionRunning(next);
+                  if (next) {
+                    scheduleSpeakIn(5000);
                   } else {
-                    console.error("🎤 TTS Service not available");
-                    Alert.alert("TTS Not Available", "TTS service is not initialized. Check your API key configuration.");
+                    clearSpeakTimer();
                   }
                 }}
               >
-                <Text style={styles.debugButtonText}>Test TTS</Text>
-              </TouchableOpacity>
-            </View>
-            
-            {/* Second row - WebSocket controls */}
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#FF9800" }]}
-                onPress={async () => {
-                  try {
-                    const response = await fetch(`${BACKEND_URL}/test-feedback`, {
-                      method: 'POST',
-                    });
-                    if (response.ok) {
-                      Alert.alert("Test Sent", "Test feedback message sent to WebSocket!");
-                    } else {
-                      Alert.alert("Test Failed", "Could not send test feedback.");
-                    }
-                  } catch (error) {
-                    Alert.alert("Test Failed", "Could not connect to backend.");
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>Test WebSocket</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#9C27B0" }]}
-                onPress={async () => {
-                  try {
-                    const response = await fetch(`${BACKEND_URL}/status`);
-                    if (response.ok) {
-                      const status = await response.json();
-                      Alert.alert(
-                        "Backend Status", 
-                        `Backend: ${status.backend}\nGroq: ${status.groq_analysis}\nConnections: ${status.active_connections}\nFrames: ${status.frame_count}`
-                      );
-                    } else {
-                      Alert.alert("Status Failed", "Could not get backend status.");
-                    }
-                  } catch (error) {
-                    Alert.alert("Status Failed", "Could not connect to backend.");
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>Check Status</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Third row - Simple feedback controls */}
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#4CAF50" }]}
-                onPress={async () => {
-                  console.log("🎯 Test Feedback button pressed");
-                  try {
-                    console.log("🎯 Sending test feedback to:", `${BACKEND_URL}/test-feedback`);
-                    const response = await fetch(`${BACKEND_URL}/test-feedback`, {
-                      method: 'POST',
-                    });
-                    console.log("🎯 Test feedback response:", response.status, response.ok);
-                    
-                    if (response.ok) {
-                      const result = await response.json();
-                      console.log("🎯 Test feedback result:", result);
-                      Alert.alert("Test Sent", "Test feedback sent! Should hear TTS in ~2 seconds.");
-                    } else {
-                      console.error("🎯 Test feedback failed:", response.status, response.statusText);
-                      Alert.alert("Test Failed", "Could not send test feedback.");
-                    }
-                  } catch (error) {
-                    console.error("🎯 Test feedback error:", error);
-                    Alert.alert("Test Failed", "Could not connect to backend.");
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>Test Feedback</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#607D8B" }]}
-                onPress={async () => {
-                  console.log("🎯 Get Latest button pressed");
-                  try {
-                    console.log("🎯 Fetching latest feedback from:", `${BACKEND_URL}/feedback.json`);
-                    const response = await fetch(`${BACKEND_URL}/feedback.json`);
-                    console.log("🎯 Get latest response:", response.status, response.ok);
-                    
-                    if (response.ok) {
-                      const feedback = await response.json();
-                      console.log("🎯 Latest feedback data:", feedback);
-                      
-                      if (feedback.feedback) {
-                        Alert.alert(
-                          "Latest Feedback", 
-                          `Frame: ${feedback.frame_number}\nFeedback: ${feedback.feedback}\nTimestamp: ${feedback.timestamp}\nIs New: ${feedback.is_new}`
-                        );
-                      } else {
-                        Alert.alert("No Feedback", "No feedback available yet.");
-                      }
-                    } else {
-                      console.error("🎯 Get latest failed:", response.status, response.statusText);
-                      Alert.alert("Failed", "Could not get feedback.");
-                    }
-                  } catch (error) {
-                    console.error("🎯 Get latest error:", error);
-                    Alert.alert("Error", "Could not connect to backend.");
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>Get Latest</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Fourth row - Direct TTS test */}
-            <View style={styles.buttonRow}>
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#E91E63" }]}
-                onPress={async () => {
-                  console.log("🎯 Direct TTS Test button pressed");
-                  try {
-                    console.log("🎯 Fetching simple test feedback from:", `${BACKEND_URL}/test-feedback-simple`);
-                    const response = await fetch(`${BACKEND_URL}/test-feedback-simple`);
-                    console.log("🎯 Simple test response:", response.status, response.ok);
-                    
-                    if (response.ok) {
-                      const feedback = await response.json();
-                      console.log("🎯 Simple test feedback:", feedback);
-                      
-                      if (feedback.feedback && ttsServiceRef.current) {
-                        console.log("🎯 Speaking simple test feedback:", feedback.feedback);
-                        await ttsServiceRef.current.speak(feedback.feedback);
-                        Alert.alert("TTS Test", "Should have heard TTS just now!");
-                      } else {
-                        Alert.alert("TTS Not Available", "TTS service not ready.");
-                      }
-                    } else {
-                      console.error("🎯 Simple test failed:", response.status, response.statusText);
-                      Alert.alert("Test Failed", "Could not get simple test feedback.");
-                    }
-                  } catch (error) {
-                    console.error("🎯 Simple test error:", error);
-                    Alert.alert("Error", "Could not connect to backend.");
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>Direct TTS Test</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.debugButton, { backgroundColor: "#795548" }]}
-                onPress={() => {
-                  console.log("🎯 Debug Info button pressed");
-                  Alert.alert(
-                    "Debug Info",
-                    `TTS Enabled: ${isTTSEnabled}\nTTS Service: ${ttsServiceRef.current ? "Available" : "Not Available"}\nBackend URL: ${BACKEND_URL}\nLast Feedback: ${lastFeedback || "None"}`
-                  );
-                }}
-              >
-                <Text style={styles.debugButtonText}>Debug Info</Text>
+                <Text style={styles.debugButtonText}>{isSessionRunning ? "Stop Session" : "Start Session"}</Text>
               </TouchableOpacity>
             </View>
           </View>
