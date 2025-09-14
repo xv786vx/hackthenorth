@@ -39,15 +39,60 @@ export default function StatusScreen() {
 
   const loadVoicesFile = async () => {
     try {
-      const asset = Asset.fromModule(require("./assets/voices.txt"));
-      await asset.downloadAsync();
-      const uri = asset.localUri || asset.uri;
-      const content = await FileSystem.readAsStringAsync(uri);
+      // 1) Try bundled asset @voices/voice.txt
+      let content = '';
+      try {
+        const asset = Asset.fromModule(require("../assets/images/voices/voice.txt"));
+        await asset.downloadAsync();
+        const uri = asset.localUri || asset.uri;
+        content = await FileSystem.readAsStringAsync(uri);
+        console.log("🗣️ Loaded bundled voices asset:", uri);
+      } catch (e) {
+        console.log("ℹ️ No bundled voices asset found, trying override file…");
+      }
+
+      // 2) Try reading a user-provided file from app documents (optional override)
+      if (!content) {
+        const overridePath = `${FileSystem.documentDirectory || ''}voices.txt`;
+        try {
+          const info = await FileSystem.getInfoAsync(overridePath);
+          if (info.exists) {
+            content = await FileSystem.readAsStringAsync(overridePath);
+            console.log("🗣️ Loaded override voices from:", overridePath);
+          }
+        } catch {}
+      }
+
+      // 3) Fallback to embedded defaults if nothing else
+      if (!content) {
+        content = [
+          'sassy | Put the phone down. Your focus called; it misses you.',
+          'sassy | Hey, champion of procrastination, how about one real task?',
+          'phone | Thumb workout complete. Now exercise your brain.',
+          "phone | If scrolling burned calories, you’d be an athlete. It doesn’t.",
+          'doomscroll | You’re spiraling. Pause. Breathe. Build something instead.',
+          'doomscroll | That feed won’t fix your future. You will.',
+          'gaming | Save the game. Save your progress in life.',
+          'gaming | New quest: close the game and open your goals.',
+          'sleeping | Cozy is nice. But your dreams need you awake.',
+          'sleeping | Nap later. Right now, small action, big win.',
+          'unproductive | This is a detour. Get back on the main road.',
+          'unproductive | One step now beats ten regrets later.',
+          'productive | Locked in. Keep the streak blazing.',
+          'productive | That’s it—quiet excellence. Continue.',
+          'encourage | You’re closer than you think. One more focused minute.',
+          'encourage | Small progress compounds. Keep going.',
+          'general | Back to the goal. What’s the next tiny step?',
+          'general | Silence the noise. Do the thing.',
+        ].join('\n');
+        console.log('🗣️ Using embedded default voices');
+      }
+
       const map: Record<string, string[]> = {};
       content.split(/\r?\n/).forEach((line) => {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) return;
-        const sep = trimmed.indexOf("|");
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const sep = trimmed.indexOf('|');
         if (sep === -1) return;
         const category = trimmed.slice(0, sep).trim().toLowerCase();
         const phrase = trimmed.slice(sep + 1).trim();
@@ -55,9 +100,10 @@ export default function StatusScreen() {
         map[category].push(phrase);
       });
       voicesMapRef.current = map;
-      console.log("🗣️ Loaded voices.txt categories:", Object.keys(map));
+      console.log('🗣️ Voices categories:', Object.keys(map));
     } catch (e) {
-      console.error("❌ Failed to load voices.txt:", e);
+      console.error('❌ Failed to initialize voices:', e);
+      voicesMapRef.current = { sassy: ['Get back to it. One tiny step now.'] };
     }
   };
 
@@ -85,11 +131,43 @@ export default function StatusScreen() {
     return pick("sassy") || pick("general") || latestFeedbackRef.current || null;
   };
 
+  const getCategoryFromAnalysis = (): string => {
+    const analysis = (latestAnalysisRef.current || latestFeedbackRef.current || "").toLowerCase();
+    if (/phone|mobile|scroll|instagram|tiktok|doom/.test(analysis)) return "doomscroll";
+    if (/gaming|game|controller|console/.test(analysis)) return "gaming";
+    if (/sleep|lying|bed/.test(analysis)) return "sleeping";
+    if (/work|laptop|typing|study|studying|writing|coding|clean|cook/.test(analysis)) return "productive";
+    return "sassy";
+  };
+
+  const generateDynamicLine = async (category: string, analysis: string): Promise<string | null> => {
+    try {
+      const resp = await fetch(`${BACKEND_URL}/generate-voice-line`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, analysis }),
+      });
+      if (!resp.ok) return null;
+      const json = await resp.json();
+      const text: string = json?.text || '';
+      if (!text) return null;
+      // Append to local voices for future randomization
+      const overridePath = `${FileSystem.documentDirectory || ''}voices.txt`;
+      try {
+        await FileSystem.writeAsStringAsync(overridePath, `dynamic | ${text}\n`, { encoding: FileSystem.EncodingType.UTF8, append: true as any });
+      } catch {}
+      return text;
+    } catch (e) {
+      return null;
+    }
+  };
+
   const scheduleSpeakIn = (delayMs: number) => {
     clearSpeakTimer();
     speakTimerRef.current = setTimeout(async () => {
       try {
-        const phrase = choosePhraseForLatest();
+        // HARD-CODED TEXT for ElevenLabs to transcribe
+        const phrase: string | null = "EXCELLENT! Stay focused. Ship one small task right now.";
         if (!isSessionRunning || !isTTSEnabled || !ttsServiceRef.current || !phrase) {
           console.log("⏱️ Skip speaking (session/enabled/service/text):", isSessionRunning, isTTSEnabled, !!ttsServiceRef.current, !!phrase);
         } else {
@@ -103,7 +181,7 @@ export default function StatusScreen() {
         const nextMs = 7000 + Math.floor(Math.random() * 8000);
         speakTimerRef.current = setTimeout(async () => {
           try {
-            const again = choosePhraseForLatest();
+            const again = "Focus up! One tiny step—do it now.";
             if (isSessionRunning && isTTSEnabled && ttsServiceRef.current && again) {
               console.log("⏱️ Speaking (repeat):", again, "in", nextMs, "ms");
               await ttsServiceRef.current.speak(again);

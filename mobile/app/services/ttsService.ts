@@ -23,6 +23,20 @@ export class TTSService {
       console.log("🎤 TTS Service: Starting to speak:", text);
       console.log("🎤 TTS Service: API Key available:", !!this.apiKey);
       console.log("🎤 TTS Service: Voice ID:", this.voiceId);
+      // Ensure audio plays even in silent mode (iOS) and properly on Android
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          staysActiveInBackground: false,
+          playsInSilentModeIOS: true,
+          interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
+          shouldDuckAndroid: true,
+          interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+          playThroughEarpieceAndroid: false,
+        });
+      } catch (e) {
+        console.warn("🎤 Could not set audio mode:", e);
+      }
       
       // Stop any currently playing audio
       if (this.sound) {
@@ -39,7 +53,7 @@ export class TTSService {
       // Create and play the audio
       const { sound } = await Audio.Sound.createAsync(
         { uri: audioData },
-        { shouldPlay: true }
+        { shouldPlay: true, volume: 1.0 }
       );
       
       console.log("🎤 TTS Service: Audio created, starting playback");
