@@ -55,7 +55,7 @@ def analyze_image_with_groq(image_path, client):
                     ],
                 }
             ],
-            model="llama-3.1-70b-versatile",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             max_completion_tokens=200,
         )
         
